@@ -244,6 +244,7 @@
                 <div class="lang-btn active" id="sourceLang">English</div>
                 <button class="swap-btn" id="swapBtn">⇄</button>
                 <div class="lang-btn" id="targetLang">ಕನ್ನಡ (Kannada)</div>
+                <button class="lang-btn" id="voiceBtn" title="Voice input">🎤 Voice</button>
             </div>
  
             <div class="translation-area">
@@ -365,27 +366,25 @@
             try {
                 const sourceLangCode = isEnglishToKannada ? 'en' : 'kn';
                 const targetLangCode = isEnglishToKannada ? 'kn' : 'en';
- 
-                // Using Google Translate API via translate.googleapis.com
-                const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLangCode}&tl=${targetLangCode}&dt=t&q=${encodeURIComponent(text)}`;
-                
-                const response = await fetch(url);
-                const data = await response.json();
- 
-                if (data && data[0]) {
-                    // Google Translate returns an array of translations
-                    let translatedText = '';
-                    data[0].forEach(item => {
-                        if (item[0]) {
-                            translatedText += item[0];
-                        }
-                    });
-                    
-                    outputText.textContent = translatedText;
-                    speakOutput.style.display = 'block';
-                } else {
-                    throw new Error('Translation failed');
+
+                // Call local backend which proxies to LibreTranslate (or other service)
+                const response = await fetch('/api/translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, source: sourceLangCode, target: targetLangCode })
+                });
+
+                if (!response.ok) {
+                    const textBody = await response.text();
+                    throw new Error(textBody || 'Translation service failed');
                 }
+
+                const payload = await response.json();
+                const translatedText = payload.translated || '';
+                if (!translatedText) throw new Error('Empty translation');
+
+                outputText.textContent = translatedText;
+                speakOutput.style.display = 'block';
  
             } catch (error) {
                 showError('Translation failed. Please check your connection and try again.');
@@ -411,6 +410,58 @@
         inputText.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'Enter') {
                 translateText();
+            }
+        });
+
+        // Voice recognition (browser Web Speech API)
+        const voiceBtn = document.getElementById('voiceBtn');
+        let recognition = null;
+        let recognizing = false;
+
+        function setupRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) return null;
+            const r = new SpeechRecognition();
+            r.lang = isEnglishToKannada ? 'en-US' : 'kn-IN';
+            r.interimResults = false;
+            r.maxAlternatives = 1;
+            r.continuous = false;
+            r.onstart = () => {
+                recognizing = true;
+                voiceBtn.textContent = '🎙️ Listening...';
+            };
+            r.onend = () => {
+                recognizing = false;
+                voiceBtn.textContent = '🎤 Voice';
+            };
+            r.onerror = (ev) => {
+                console.error('SpeechRecognition error', ev);
+                showError('Voice input error. Make sure microphone permission is granted.');
+                recognizing = false;
+                voiceBtn.textContent = '🎤 Voice';
+            };
+            r.onresult = (ev) => {
+                const spoken = ev.results[0][0].transcript;
+                inputText.value = spoken;
+                charCount.textContent = spoken.length;
+                // Trigger translation automatically
+                translateText();
+            };
+            return r;
+        }
+
+        voiceBtn.addEventListener('click', () => {
+            if (!recognition) recognition = setupRecognition();
+            if (!recognition) {
+                showError('Voice recognition is not supported in this browser. Use Chrome/Edge.');
+                return;
+            }
+            // Update recognition language before starting
+            recognition.lang = isEnglishToKannada ? 'en-US' : 'kn-IN';
+            if (recognizing) {
+                recognition.stop();
+            } else {
+                recognition.start();
             }
         });
     </script>
